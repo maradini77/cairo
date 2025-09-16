@@ -42,6 +42,7 @@
 //! assert!(first_byte == 0x41);
 //! ```
 
+use crate::IndexView;
 use crate::array::{ArrayTrait, Span, SpanTrait};
 use crate::bytes_31::split_bytes31;
 #[allow(unused_imports)]
@@ -55,7 +56,7 @@ use crate::cmp::min;
 use crate::integer::{U32TryIntoNonZero, u128_safe_divmod};
 #[feature("bounded-int-utils")]
 use crate::internal::bounded_int::{BoundedInt, downcast, upcast};
-use crate::num::traits::CheckedSub;
+use crate::num::traits::{CheckedAdd, CheckedSub};
 #[allow(unused_imports)]
 use crate::serde::Serde;
 use crate::traits::{Into, TryInto};
@@ -694,6 +695,28 @@ pub impl ByteSpanImpl of ByteSpanTrait {
         ba
     }
 
+    // TODO(giladchase): remove `at` and add impl of get<usize>.
+    fn at(self: @ByteSpan, index: usize) -> Option<u8> {
+        let actual_index = index.checked_add(upcast(self.first_char_start_offset))?;
+        let (word_index, index_in_word) = DivRem::div_rem(actual_index, BYTES_IN_BYTES31_NONZERO);
+
+        match self.data.get(word_index) {
+            Some(word) => {
+                // index_in_word is from MSB, we need index from LSB.
+                Some(word.at(BYTES_IN_BYTES31 - 1 - index_in_word))
+            },
+            None => {
+                if word_index == self.data.len() && index_in_word < upcast(self.remainder_len) {
+                    // index_in_word is from MSB, we need index from LSB.
+                    let index_in_remainder = upcast(self.remainder_len) - 1 - index_in_word;
+                    Some(u8_at_u256((*self.remainder_word).into(), index_in_remainder))
+                } else {
+                    None // Out of bounds.
+                }
+            },
+        }
+    }
+
     /// Gets the element(s) at the given index.
     /// Accepts ranges (returns Option<ByteSpan>), and (to-be-implemented) single indices (returns
     /// Option<u8>).
@@ -766,6 +789,12 @@ impl ByteSpanSliceIndexRangeInclusive of crate::ops::SliceIndex<
         let end_exclusive = crate::num::traits::CheckedAdd::checked_add(index.end, 1)?;
         let range = crate::ops::Range { start: index.start, end: end_exclusive };
         ByteSpanTrait::get(self, range)
+    }
+}
+
+impl ByteSpanIndex of IndexView<ByteSpan, usize, u8> {
+    fn index(self: @ByteSpan, index: usize) -> u8 {
+        self.at(index).expect('Index out of bounds')
     }
 }
 
